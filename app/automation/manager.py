@@ -6,10 +6,12 @@ from app.utils.logger import logger
 
 class ChromeInstance:
     """Represents a single automated Chrome instance using Playwright, running in a dedicated thread."""
-    def __init__(self, profile_name: str, user_data_dir: str, proxy_str: str = None, 
+    def __init__(self, profile_id: str, profile_name: str, user_data_dir: str, proxy_str: str = None, 
                  proxy_user: str = None, proxy_pass: str = None,
                  win_x: int = None, win_y: int = None, win_w: int = None, win_h: int = None,
-                 small_window: bool = False, mobile_mode: bool = False):
+                 small_window: bool = False, mobile_mode: bool = False,
+                 latitude: float = None, longitude: float = None):
+        self.profile_id = profile_id
         self.profile_name = profile_name
         self.user_data_dir = user_data_dir
         self.proxy_str = proxy_str
@@ -17,6 +19,8 @@ class ChromeInstance:
         self.proxy_pass = proxy_pass
         self.small_window = small_window
         self.mobile_mode = mobile_mode
+        self.latitude = latitude
+        self.longitude = longitude
         
         # Window sizing/positioning
         self.win_x = win_x
@@ -30,6 +34,20 @@ class ChromeInstance:
         self.action_queue = queue.Queue()
         self.thread = None
         self.on_close_callback = None
+
+    def fetch_active_ip(self) -> str:
+        """Fetches active public IP address of the browser context."""
+        try:
+            if self.page and not self.page.is_closed():
+                response = self.page.request.get("https://api.ipify.org?format=json", timeout=5000)
+                if response.ok:
+                    data = response.json()
+                    ip = data.get("ip", "")
+                    if ip:
+                        return ip
+        except Exception:
+            pass
+        return ""
 
     def start(self, on_close_callback=None):
         """Starts the browser lifecycle in a background thread."""
@@ -50,9 +68,9 @@ class ChromeInstance:
             with sync_playwright() as p:
                 # Prepare proxy dictionary if configured
                 proxy_config = None
-                if self.proxy_str:
+                if self.proxy_str and self.proxy_str.strip() and self.proxy_str.strip().lower() != "no proxy":
                     # Standardize server format (requires http/socks scheme)
-                    server_url = self.proxy_str
+                    server_url = self.proxy_str.strip()
                     if not (server_url.startswith("http://") or server_url.startswith("https://") or server_url.startswith("socks5://")):
                         server_url = f"http://{server_url}"
                     
@@ -72,7 +90,9 @@ class ChromeInstance:
                 if self.win_w is not None and self.win_h is not None:
                     args.append(f"--window-size={self.win_w},{self.win_h}")
                 else:
-                    if not self.small_window:
+                    if self.small_window:
+                        args.append("--window-size=480,720")
+                    else:
                         args.append("--start-maximized")
 
                 # Prepare mobile emulation configurations
@@ -87,6 +107,16 @@ class ChromeInstance:
                     is_mobile = True
                     has_touch = True
 
+                geolocation = None
+                permissions = None
+                if self.latitude is not None and self.longitude is not None:
+                    try:
+                        geolocation = {"latitude": float(self.latitude), "longitude": float(self.longitude)}
+                        permissions = ["geolocation"]
+                        logger.log(f"[{self.profile_name}] Spoofing GPS Geolocation: Lat {self.latitude}, Lng {self.longitude}")
+                    except Exception as e:
+                        logger.log(f"[{self.profile_name}] Invalid geolocation coordinates: {e}")
+
                 logger.log(f"[{self.profile_name}] Launching browser with persistent context...")
                 
                 # Launch persistent Chrome browser context
@@ -99,13 +129,40 @@ class ChromeInstance:
                     user_agent=user_agent,
                     viewport=viewport,
                     is_mobile=is_mobile,
-                    has_touch=has_touch
+                    has_touch=has_touch,
+                    geolocation=geolocation,
+                    permissions=permissions
                 )
 
                 # Set default page or open new page
                 pages = self.browser_context.pages
                 self.page = pages[0] if pages else self.browser_context.new_page()
                 
+                # Enforce exact window bounds for Small Window or Tile Windows via CDP
+                if self.small_window or (self.win_w is not None and self.win_h is not None):
+                    try:
+                        target_w = self.win_w if self.win_w else 480
+                        target_h = self.win_h if self.win_h else 720
+                        target_x = self.win_x if self.win_x is not None else 100
+                        target_y = self.win_y if self.win_y is not None else 100
+                        
+                        cdp = self.browser_context.new_cdp_session(self.page)
+                        win_info = cdp.send("Browser.getWindowForTarget")
+                        window_id = win_info["windowId"]
+                        cdp.send("Browser.setWindowBounds", {
+                            "windowId": window_id,
+                            "bounds": {
+                                "windowState": "normal",
+                                "width": target_w,
+                                "height": target_h,
+                                "left": target_x,
+                                "top": target_y
+                            }
+                        })
+                        logger.log(f"[{self.profile_name}] Applied small window size ({target_w}x{target_h}) via CDP.")
+                    except Exception as e:
+                        logger.log(f"[{self.profile_name}] Window bounds adjustment note: {e}")
+
                 # Hook close event to trigger state change in GUI
                 self.browser_context.on("close", lambda ctx: self._handle_browser_closed_event())
                 
@@ -133,6 +190,8 @@ class ChromeInstance:
                         if action == "navigate":
                             logger.log(f"[{self.profile_name}] Navigating to: {data}...")
                             self.page.goto(data, timeout=30000)
+                        elif action == "custom" and callable(data):
+                            data()
                     except queue.Empty:
                         # Yield control to Playwright's asyncio loop to process events
                         try:
@@ -182,13 +241,16 @@ class ChromeGroupManager:
     def launch_instance(self, profile_id: str, profile_name: str, user_data_dir: str, 
                         proxy: str = None, proxy_user: str = None, proxy_pass: str = None,
                         win_x: int = None, win_y: int = None, win_w: int = None, win_h: int = None,
-                        small_window: bool = False, mobile_mode: bool = False, on_close_callback=None) -> ChromeInstance:
+                        small_window: bool = False, mobile_mode: bool = False,
+                        latitude: float = None, longitude: float = None,
+                        on_close_callback=None) -> ChromeInstance:
         """Creates, launches, and registers a new ChromeInstance."""
         if profile_id in self.active_instances:
             logger.log(f"Browser '{profile_name}' is already running.")
             return self.active_instances[profile_id]
 
         instance = ChromeInstance(
+            profile_id=profile_id,
             profile_name=profile_name,
             user_data_dir=user_data_dir,
             proxy_str=proxy,
@@ -199,7 +261,9 @@ class ChromeGroupManager:
             win_w=win_w,
             win_h=win_h,
             small_window=small_window,
-            mobile_mode=mobile_mode
+            mobile_mode=mobile_mode,
+            latitude=latitude,
+            longitude=longitude
         )
         
         self.active_instances[profile_id] = instance

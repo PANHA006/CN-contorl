@@ -9,7 +9,14 @@ def load_settings() -> dict:
     if not os.path.exists(SETTINGS_FILE):
         default_settings = {
             "profiles": [],
-            "global_delay": 5
+            "global_delay": 3,
+            "comments_text": "Great post!\nAwesome content!\nNice info!",
+            "comment_separator": "\\n",
+            "add_emoji": True,
+            "target_url": "",
+            "watch_time": 10,
+            "batch_size": 5,
+            "batch_rest": 15
         }
         save_settings(default_settings)
         return default_settings
@@ -20,10 +27,29 @@ def load_settings() -> dict:
             if "profiles" not in data:
                 data["profiles"] = []
             if "global_delay" not in data:
-                data["global_delay"] = 5
+                data["global_delay"] = 3
+            if "comments_text" not in data:
+                data["comments_text"] = "Great post!\nAwesome content!\nNice info!"
+            if "comment_separator" not in data:
+                data["comment_separator"] = "\\n"
+            if "add_emoji" not in data:
+                data["add_emoji"] = True
+            if "target_url" not in data:
+                data["target_url"] = ""
+            if "watch_time" not in data:
+                data["watch_time"] = 10
+            if "batch_size" not in data:
+                data["batch_size"] = 5
+            if "batch_rest" not in data:
+                data["batch_rest"] = 15
             return data
     except Exception:
-        return {"profiles": [], "global_delay": 5}
+        return {
+            "profiles": [], "global_delay": 3,
+            "comments_text": "Great post!\nAwesome content!\nNice info!",
+            "comment_separator": "\\n", "add_emoji": True,
+            "target_url": "", "watch_time": 10, "batch_size": 5, "batch_rest": 15
+        }
 
 def save_settings(settings: dict) -> None:
     """Saves settings dictionary to settings.json."""
@@ -47,6 +73,8 @@ def add_profile(profile_data: dict) -> dict:
         "proxy": profile_data.get("proxy"),
         "proxy_user": profile_data.get("proxy_user"),
         "proxy_pass": profile_data.get("proxy_pass"),
+        "latitude": profile_data.get("latitude"),
+        "longitude": profile_data.get("longitude"),
         "user_data_dir": get_profile_dir(profile_id)
     }
     
@@ -79,3 +107,19 @@ def delete_profile(profile_id: str) -> None:
                 shutil.rmtree(path)
             except Exception:
                 pass  # Ignore file lock errors
+
+def update_profile(profile_id: str, updated_data: dict) -> dict:
+    """Updates an existing profile entry in settings.json."""
+    settings = load_settings()
+    for p in settings["profiles"]:
+        if p["id"] == profile_id:
+            p["name"] = updated_data["name"]
+            p["proxy"] = updated_data.get("proxy")
+            p["proxy_user"] = updated_data.get("proxy_user")
+            p["proxy_pass"] = updated_data.get("proxy_pass")
+            p["latitude"] = updated_data.get("latitude")
+            p["longitude"] = updated_data.get("longitude")
+            save_settings(settings)
+            return p
+    return None
+
