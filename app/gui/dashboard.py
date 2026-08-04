@@ -1,8 +1,9 @@
 import customtkinter as ctk
 import time
+import threading
 from tkinter import filedialog
 from app.gui.styles import *
-from app.gui.dialogs import AddProfileDialog, EditProfileDialog
+from app.gui.dialogs import AddProfileDialog, EditProfileDialog, BulkAddProfilesDialog
 from app.utils.file_helper import load_settings, save_settings, add_profile, delete_profile, update_profile
 from app.utils.logger import logger
 from app.automation.manager import ChromeGroupManager
@@ -20,10 +21,11 @@ class DashboardApp(ctk.CTk):
         # Initialize browser automation manager
         self.manager = ChromeGroupManager()
         
-        # Keep track of active profile IDs
+        # Keep track of active profile IDs and workers
         self.running_profiles = set()
         self.checked_profiles = {}
         self.active_profile_ips = {}
+        self.current_batch_worker = None
         
         # Grid Layout: Row 0 Header, Row 1 Body (2 Columns: 60% Left / 40% Right)
         self.grid_columnconfigure(0, weight=1)
@@ -103,15 +105,27 @@ class DashboardApp(ctk.CTk):
         
         add_profile_btn = ctk.CTkButton(
             top_row_frame, 
-            text="➕ Add Chrome Profile", 
+            text="➕ Add Profile", 
             font=FONT_TEXT_BOLD,
             fg_color=COLOR_PRIMARY,
             hover_color="#5B85DB",
             text_color=COLOR_BG,
-            width=160,
+            width=120,
             command=self.on_add_profile_clicked
         )
         add_profile_btn.grid(row=0, column=0, sticky="w")
+        
+        bulk_add_btn = ctk.CTkButton(
+            top_row_frame, 
+            text="📦 Bulk Add Profiles", 
+            font=FONT_TEXT_BOLD,
+            fg_color=COLOR_SECONDARY,
+            hover_color="#A37DF2",
+            text_color=COLOR_BG,
+            width=150,
+            command=self.on_bulk_add_profiles_clicked
+        )
+        bulk_add_btn.grid(row=0, column=1, padx=(6, 0), sticky="w")
         
         group_btns_frame = ctk.CTkFrame(top_row_frame, fg_color="transparent")
         group_btns_frame.grid(row=0, column=2, sticky="e")
@@ -761,6 +775,19 @@ class DashboardApp(ctk.CTk):
         logger.log(f"Profile '{new_prof['name']}' created.")
         self.refresh_profiles_list()
 
+    def on_bulk_add_profiles_clicked(self):
+        """Opens popup dialog to bulk create multiple profiles."""
+        BulkAddProfilesDialog(self, self.save_bulk_profiles)
+
+    def save_bulk_profiles(self, new_profiles_list: list):
+        """Callback from BulkAddProfilesDialog to save all newly created profiles."""
+        created_count = 0
+        for pdata in new_profiles_list:
+            add_profile(pdata)
+            created_count += 1
+        logger.log(f"Successfully bulk created {created_count} profiles with auto Cambodia GPS!")
+        self.refresh_profiles_list()
+
     def on_edit_profile_clicked(self, profile_data: dict):
         """Opens popup dialog to edit an existing profile."""
         if profile_data["id"] in self.running_profiles:
@@ -862,7 +889,11 @@ class DashboardApp(ctk.CTk):
         ).start()
 
     def on_stop_checked_clicked(self):
-        """Stops all checked browser instances."""
+        """Stops all checked browser instances and any running mass automation worker."""
+        if self.current_batch_worker and self.current_batch_worker.is_alive():
+            logger.log("Stopping active Mass Automation task...")
+            self.current_batch_worker.stop()
+
         checked_ids = [pid for pid, var in self.checked_profiles.items() if var.get() == "on"]
         
         active_checked = [pid for pid in checked_ids if pid in self.running_profiles]
@@ -1017,9 +1048,17 @@ class DashboardApp(ctk.CTk):
             "watch_time": watch_time,
             "small_window": self.small_window_var.get() == "on",
             "mobile_mode": self.mobile_mode_var.get() == "on",
-            "tile": self.tile_on_launch_var.get() == "on"
+            "tile": self.tile_on_launch_var.get() == "on",
+            "screen_w": self.winfo_screenwidth(),
+            "screen_h": self.winfo_screenheight()
         }
         
+        # Check if worker is already running
+        if self.current_batch_worker and self.current_batch_worker.is_alive():
+            logger.log("Warning: A Mass Automation task is already running! Stopping previous task first...")
+            self.current_batch_worker.stop()
+            time.sleep(1.0)
+            
         # Get selected profiles (either checked checkboxes or all loaded profiles)
         checked_ids = [pid for pid, var in self.checked_profiles.items() if var.get() == "on"]
         settings = load_settings()
@@ -1043,7 +1082,7 @@ class DashboardApp(ctk.CTk):
             self.after(0, lambda: self.progress_lbl.configure(text=f"Progress: {completed} / {total} Profiles ({ratio*100:.1f}%)"))
 
         logger.log(f"Dispatching BatchAutomationWorker for {len(selected_profiles)} profile(s)...")
-        BatchAutomationWorker(
+        self.current_batch_worker = BatchAutomationWorker(
             selected_profiles=selected_profiles,
             tasks_list=tasks_list,
             target_url=url,
@@ -1053,7 +1092,8 @@ class DashboardApp(ctk.CTk):
             delay_sec=delay,
             options=options,
             progress_callback=update_progress
-        ).start()
+        )
+        self.current_batch_worker.start()
 
     def get_checked_active_instances(self) -> list:
         checked_ids = [pid for pid, var in self.checked_profiles.items() if var.get() == "on"]
@@ -1110,6 +1150,9 @@ class DashboardApp(ctk.CTk):
     def on_close_app(self):
         """Cleans up and closes all browsers before exiting."""
         logger.log("Saving automation state and closing all browsers before exit...")
+        if self.current_batch_worker and self.current_batch_worker.is_alive():
+            self.current_batch_worker.stop()
+
         self.save_current_automation_state()
         self.manager.close_all()
         

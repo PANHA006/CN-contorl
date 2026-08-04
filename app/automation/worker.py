@@ -161,9 +161,10 @@ class AutomationTaskWorker(threading.Thread):
         )
         import random
         
-        # Initialize non-repeating comment pool
+        # Initialize non-repeating comment pool with thread lock
         raw_comments = self.options.get("comment_list", [])
         comment_pool = list(raw_comments)
+        comment_pool_lock = threading.Lock()
         task_str = ", ".join(self.tasks_list)
         
         threads = []
@@ -175,8 +176,15 @@ class AutomationTaskWorker(threading.Thread):
             def run_instance_pipeline(inst=instance, initial_delay=stagger_delay):
                 if initial_delay > 0:
                     logger.log(f"[{inst.profile_name}] Staggered start delay: pausing {initial_delay:.1f}s before starting tasks...")
-                    time.sleep(initial_delay)
+                    slept = 0.0
+                    while slept < initial_delay and not inst.stop_event.is_set():
+                        time.sleep(0.5)
+                        slept += 0.5
                     
+                if inst.stop_event.is_set():
+                    logger.log(f"[{inst.profile_name}] Browser stopped before task execution.")
+                    return
+
                 logger.log(f"[{inst.profile_name}] Starting parallel [{task_str}] tasks on: {self.target_url}...")
                 
                 action_finished_event = threading.Event()
@@ -197,8 +205,11 @@ class AutomationTaskWorker(threading.Thread):
                             except Exception as e:
                                 logger.log(f"[{i.profile_name}] Navigation error: {e}")
                                 
-                        # Watch Video Time Delay before actions
-                        watch_time = float(self.options.get("watch_time", 0))
+                        # Watch Video Time Delay before actions (only run if LIKE, COMMENT, or SHARE post tasks are enabled)
+                        is_post_action = any(t in self.tasks_list for t in ["LIKE", "COMMENT", "SHARE"])
+                        raw_watch = float(self.options.get("watch_time", 0))
+                        watch_time = raw_watch if is_post_action else 0.0
+
                         if watch_time > 0:
                             actual_watch = watch_time + random.uniform(0.5, 2.0)
                             logger.log(f"[{i.profile_name}] Playing and watching Reel/Video for {actual_watch:.1f}s before actions...")
@@ -211,6 +222,9 @@ class AutomationTaskWorker(threading.Thread):
                             time.sleep(actual_watch)
                                 
                         for t_idx, task in enumerate(self.tasks_list):
+                            if i.stop_event.is_set():
+                                break
+
                             if t_idx > 0 or watch_time > 0:
                                 inter_delay = random.uniform(1.0, 3.0)
                                 logger.log(f"[{i.profile_name}] Inter-action step delay: pausing {inter_delay:.1f}s before {task}...")
@@ -224,12 +238,13 @@ class AutomationTaskWorker(threading.Thread):
                                 time.sleep(random.uniform(1.0, 2.5))
                                 
                             elif task == "COMMENT":
-                                if not comment_pool and raw_comments:
-                                    comment_pool = list(raw_comments)
                                 selected_cmt = None
-                                if comment_pool:
-                                    selected_cmt = random.choice(comment_pool)
-                                    comment_pool.remove(selected_cmt)
+                                with comment_pool_lock:
+                                    if not comment_pool and raw_comments:
+                                        comment_pool = list(raw_comments)
+                                    if comment_pool:
+                                        selected_cmt = random.choice(comment_pool)
+                                        comment_pool.remove(selected_cmt)
                                 
                                 c_list = [selected_cmt] if selected_cmt else raw_comments
                                 enable_emoji = self.options.get("enable_emoji", True)
@@ -252,8 +267,14 @@ class AutomationTaskWorker(threading.Thread):
                     finally:
                         evt.set()
 
-                instance.action_queue.put(("custom", perform_action))
-                action_finished_event.wait(timeout=300)
+                inst.action_queue.put(("custom", perform_action))
+
+                # Periodically check action_finished_event or browser stop_event (thread safe)
+                while not action_finished_event.is_set():
+                    if inst.stop_event.is_set():
+                        action_finished_event.set()
+                        break
+                    action_finished_event.wait(timeout=0.5)
 
             t = threading.Thread(target=run_instance_pipeline, daemon=True)
             threads.append(t)
@@ -287,10 +308,15 @@ class BatchAutomationWorker(threading.Thread):
         self.progress_callback = progress_callback
         self.on_finished = on_finished_callback
         self.stop_requested = False
+        self.current_batch_instances = []
         self.daemon = True
 
     def stop(self):
         self.stop_requested = True
+        if hasattr(self, 'current_batch_instances') and self.current_batch_instances:
+            for inst in self.current_batch_instances:
+                if inst and hasattr(inst, 'stop_event'):
+                    inst.stop_event.set()
 
     def run(self):
         try:
@@ -301,6 +327,11 @@ class BatchAutomationWorker(threading.Thread):
             batches = [self.selected_profiles[i:i + self.batch_size] for i in range(0, total_profiles, self.batch_size)]
             completed_count = 0
             
+            tile = self.options.get("tile", False)
+            small_window = self.options.get("small_window", False)
+            screen_w = self.options.get("screen_w", 1920)
+            screen_h = self.options.get("screen_h", 1080)
+
             for b_index, batch_profiles in enumerate(batches):
                 if self.stop_requested:
                     logger.log("Mass Automation task stopped by user.")
@@ -308,13 +339,34 @@ class BatchAutomationWorker(threading.Thread):
                     
                 logger.log(f"--- Processing Batch {b_index + 1} / {len(batches)} ({len(batch_profiles)} profile(s)) ---")
                 
+                # Grid layout calculations for tiling
+                count = len(batch_profiles)
+                if small_window:
+                    win_w = 390
+                    win_h = min(820, screen_h - 80)
+                    cols = max(1, screen_w // win_w)
+                else:
+                    cols = 2 if count <= 4 else (3 if count > 4 else 1)
+                    rows = max(1, (count + cols - 1) // cols)
+                    win_w = screen_w // cols
+                    win_h = (screen_h - 60) // rows
+
                 batch_instances = []
+                self.current_batch_instances = batch_instances
                 # 1. Launch current batch instances
-                for profile in batch_profiles:
+                for idx, profile in enumerate(batch_profiles):
                     if self.stop_requested:
                         break
                     pid = profile["id"]
                     profile_dir = profile.get("user_data_dir") or get_profile_dir(pid)
+
+                    win_x, win_y = None, None
+                    if tile:
+                        r = idx // cols
+                        c = idx % cols
+                        win_x = c * win_w
+                        win_y = r * win_h
+
                     if pid not in self.manager.active_instances:
                         instance = self.manager.launch_instance(
                             profile_id=pid,
@@ -323,7 +375,11 @@ class BatchAutomationWorker(threading.Thread):
                             proxy=profile.get("proxy", ""),
                             proxy_user=profile.get("proxy_user", ""),
                             proxy_pass=profile.get("proxy_pass", ""),
-                            small_window=self.options.get("small_window", False),
+                            win_x=win_x,
+                            win_y=win_y,
+                            win_w=win_w,
+                            win_h=win_h,
+                            small_window=small_window,
                             mobile_mode=self.options.get("mobile_mode", False),
                             latitude=profile.get("latitude"),
                             longitude=profile.get("longitude")
@@ -350,6 +406,10 @@ class BatchAutomationWorker(threading.Thread):
                 task_worker.start()
                 task_worker.join()
                 
+                if self.stop_requested:
+                    logger.log("Mass Automation task stopped before cleanup.")
+                    break
+
                 logger.log("Batch tasks completed. Pausing 3.0s for visual confirmation before closing browsers...")
                 time.sleep(3.0)
                 
@@ -371,7 +431,11 @@ class BatchAutomationWorker(threading.Thread):
                     max_rest = max(min_rest + 1.0, self.batch_rest_delay * 1.5)
                     actual_rest = random.uniform(min_rest, max_rest)
                     logger.log(f"Batch {b_index + 1} complete. Random rest delay for {actual_rest:.1f}s before next batch...")
-                    time.sleep(actual_rest)
+                    
+                    rest_slept = 0.0
+                    while rest_slept < actual_rest and not self.stop_requested:
+                        time.sleep(0.5)
+                        rest_slept += 0.5
 
             logger.log(f"=== Mass Automation Completed! Processed all {total_profiles} profile(s) successfully. ===")
         except Exception as e:

@@ -47,9 +47,13 @@ def execute_auto_like(page, target_url: str, reaction_type: str = "LIKE", random
             return False
 
         # Check if THIS specific Like button is already reacted to
-        btn_label = (like_btn.get_attribute("aria-label") or "").lower()
-        btn_pressed = like_btn.get_attribute("aria-pressed") == "true"
-        
+        try:
+            btn_label = (like_btn.get_attribute("aria-label") or "").lower()
+            btn_pressed = like_btn.get_attribute("aria-pressed") == "true"
+        except Exception:
+            btn_label = ""
+            btn_pressed = False
+
         if btn_pressed or "unlike" in btn_label or "remove" in btn_label or "liked" in btn_label or "បានចូលចិត្ត" in btn_label:
             logger.log(f"Post/Video is already reacted to on: {target_url}. Skipping to preserve reaction.")
             return True
@@ -67,6 +71,10 @@ def execute_auto_like(page, target_url: str, reaction_type: str = "LIKE", random
             logger.log(f"Successfully liked post: {target_url}")
             return True
         else:
+            # Hover over button to reveal reaction popover
+            box = like_btn.bounding_box()
+            if box:
+                page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
             like_btn.hover()
             page.wait_for_timeout(1500)
             
@@ -94,12 +102,16 @@ def execute_auto_like(page, target_url: str, reaction_type: str = "LIKE", random
                 logger.log(f"Reacted with default Like on: {target_url}")
                 return True
     except Exception as e:
-        logger.log(f"Error in execute_auto_like: {e}")
+        err_str = str(e)
+        if "closed" in err_str.lower() or "target page" in err_str.lower():
+            logger.log(f"Notice: Browser window was closed by user during action on: {target_url}")
+        else:
+            logger.log(f"Error in execute_auto_like: {e}")
         return False
 
 
 def execute_auto_follow(page, target_url: str, target_type: str = "USER", set_favorites: bool = True, navigate_first: bool = True) -> bool:
-    """Automates following a user or page on Facebook and setting Favorites."""
+    """Automates following a user or page on Facebook and setting Favorites safely without unfollowing."""
     try:
         if navigate_first and target_url and page.url != target_url:
             page.goto(target_url, timeout=30000)
@@ -128,11 +140,26 @@ def execute_auto_follow(page, target_url: str, target_type: str = "USER", set_fa
                     break
                 
         if follow_btn:
-            follow_btn.click()
-            page.wait_for_timeout(1500)
-            logger.log(f"Clicked Follow / Following for {target_type}: {target_url}")
+            try:
+                btn_text = (follow_btn.inner_text() or follow_btn.get_attribute("aria-label") or "").lower()
+            except Exception:
+                btn_text = ""
+
+            already_following = "following" in btn_text or "បានតាមដាន" in btn_text
+
+            if already_following and not set_favorites:
+                logger.log(f"[{target_type}] Already following: {target_url}. Skipping action.")
+                return True
+
+            if not already_following:
+                follow_btn.click()
+                page.wait_for_timeout(1500)
+                logger.log(f"Clicked Follow for {target_type}: {target_url}")
+            else:
+                follow_btn.click()
+                page.wait_for_timeout(1500)
+                logger.log(f"Opening Following menu for {target_type} to check Favorites: {target_url}")
             
-            # If set_favorites is enabled, check for Favorites in popup menu or modal dialog
             if set_favorites:
                 fav_selectors = [
                     "div[role='menuitem']:has-text('Favorites')",
@@ -156,7 +183,6 @@ def execute_auto_follow(page, target_url: str, target_type: str = "USER", set_fa
                     fav_opt.click()
                     page.wait_for_timeout(1000)
                     
-                    # Check for Update button (Page Modal)
                     update_btn = page.query_selector("div[role='button']:has-text('Update'), div[role='button']:has-text('ធ្វើបច្ចុប្បន្នភាព'), div[role='button']:has-text('រក្សាទុក')")
                     if update_btn:
                         update_btn.click()
@@ -172,7 +198,11 @@ def execute_auto_follow(page, target_url: str, target_type: str = "USER", set_fa
             logger.log(f"Follow button not found on: {target_url}")
             return False
     except Exception as e:
-        logger.log(f"Error in execute_auto_follow: {e}")
+        err_str = str(e)
+        if "closed" in err_str.lower() or "target page" in err_str.lower():
+            logger.log(f"Notice: Browser window was closed by user during action on: {target_url}")
+        else:
+            logger.log(f"Error in execute_auto_follow: {e}")
         return False
 
 
@@ -188,7 +218,6 @@ def execute_auto_comment(page, target_url: str, comment_list: list = None, enabl
             
         selected_comment = random.choice(comment_list).strip()
         if enable_emoji:
-            # Smart Emoji Check: If comment already contains an emoji, don't double append!
             has_existing_emoji = any(ord(char) > 127000 or char in DEFAULT_EMOJIS for char in selected_comment)
             if not has_existing_emoji:
                 selected_comment += " " + random.choice(DEFAULT_EMOJIS)
@@ -206,7 +235,6 @@ def execute_auto_comment(page, target_url: str, comment_list: list = None, enabl
             if box:
                 break
                 
-        # If box is not found directly, try clicking the Reel/Post Comment Icon Button to open comment panel
         if not box:
             open_comment_btns = [
                 "div[aria-label='Comment']", "div[aria-label='មតិយោបល់']",
@@ -238,26 +266,46 @@ def execute_auto_comment(page, target_url: str, comment_list: list = None, enabl
             box.click()
             page.wait_for_timeout(500)
             
-            # Khmer Unicode & Rich Text Editor Input Logic:
+            # Type Khmer / Unicode text into React text box
             try:
-                # Primary method: Direct Unicode Text Insertion
                 page.keyboard.insert_text(selected_comment)
             except Exception:
                 try:
-                    # Fallback method: ExecCommand text insertion for React/DraftJS editors
                     page.evaluate("([el, txt]) => { el.focus(); document.execCommand('insertText', false, txt); }", [box, selected_comment])
                 except Exception:
                     box.fill(selected_comment)
                     
             page.wait_for_timeout(800)
             page.keyboard.press("Enter")
+            page.wait_for_timeout(500)
+
+            # Check if there is a Send/Submit Comment button to click as backup
+            send_comment_btns = [
+                "div[aria-label='Comment'][role='button']",
+                "div[aria-label='Post comment']",
+                "div[aria-label='ផ្ញើ']",
+                "div[aria-label='មតិយោបល់']"
+            ]
+            for s_btn_sel in send_comment_btns:
+                s_btn = page.query_selector(s_btn_sel)
+                if s_btn and s_btn.is_visible():
+                    try:
+                        s_btn.click()
+                        break
+                    except Exception:
+                        pass
+
             logger.log(f"Successfully commented '{selected_comment}' on: {target_url}")
             return True
         else:
             logger.log(f"Comment input box not found on: {target_url}")
             return False
     except Exception as e:
-        logger.log(f"Error in execute_auto_comment: {e}")
+        err_str = str(e)
+        if "closed" in err_str.lower() or "target page" in err_str.lower():
+            logger.log(f"Notice: Browser window was closed by user during action on: {target_url}")
+        else:
+            logger.log(f"Error in execute_auto_comment: {e}")
         return False
 
 
@@ -292,6 +340,44 @@ def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", capti
             share_btn.click()
             page.wait_for_timeout(1500)
             
+            # Destination-specific menu option matching
+            if destination == "STORY":
+                story_selectors = [
+                    "div[role='menuitem']:has-text('Share to your story')",
+                    "div[role='menuitem']:has-text('ចែករំលែកទៅកាន់រឿង')",
+                    "span:has-text('Share to your story')",
+                    "span:has-text('ចែករំលែកទៅកាន់រឿង')"
+                ]
+                story_btn = None
+                for st_sel in story_selectors:
+                    story_btn = page.query_selector(st_sel)
+                    if story_btn:
+                        break
+                if story_btn:
+                    story_btn.click()
+                    page.wait_for_timeout(1000)
+                    logger.log(f"Successfully shared post to Story: {target_url}")
+                    return True
+
+            elif destination == "GROUP":
+                group_selectors = [
+                    "div[role='menuitem']:has-text('Share to a group')",
+                    "div[role='menuitem']:has-text('ចែករំលែកទៅកាន់ក្រុម')",
+                    "span:has-text('Share to a group')",
+                    "span:has-text('ចែករំលែកទៅកាន់ក្រុម')"
+                ]
+                group_btn = None
+                for gr_sel in group_selectors:
+                    group_btn = page.query_selector(gr_sel)
+                    if group_btn:
+                        break
+                if group_btn:
+                    group_btn.click()
+                    page.wait_for_timeout(1000)
+                    logger.log(f"Opened Share to Group menu for: {target_url}")
+                    return True
+
+            # Default or PUBLIC feed sharing: Look for Share Now
             share_now_selectors = [
                 "div[role='button']:has-text('Share now')",
                 "div[role='button']:has-text('ចែករំលែកឥឡូវនេះ')",
@@ -317,5 +403,9 @@ def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", capti
             logger.log(f"Share button not found on: {target_url}")
             return False
     except Exception as e:
-        logger.log(f"Error in execute_auto_share: {e}")
+        err_str = str(e)
+        if "closed" in err_str.lower() or "target page" in err_str.lower():
+            logger.log(f"Notice: Browser window was closed by user during action on: {target_url}")
+        else:
+            logger.log(f"Error in execute_auto_share: {e}")
         return False
