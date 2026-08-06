@@ -153,8 +153,25 @@ def execute_auto_follow(page, target_url: str, target_type: str = "USER", set_fa
 
             if not already_following:
                 follow_btn.click()
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(2000)
                 logger.log(f"Clicked Follow for {target_type}: {target_url}")
+                
+                # If setting favorites on first-time follow, click the newly transformed 'Following' button to open the menu
+                if set_favorites:
+                    following_selectors = [
+                        "div[role='button']:has-text('Following')", "div[role='button']:has-text('បានតាមដាន')",
+                        "div[aria-label='Following']", "div[aria-label='បានតាមដាន']",
+                        "span:has-text('Following')", "span:has-text('បានតាមដាន')"
+                    ]
+                    following_btn = None
+                    for f_sel in following_selectors:
+                        following_btn = page.query_selector(f_sel)
+                        if following_btn and following_btn.is_visible():
+                            break
+                    if following_btn:
+                        following_btn.click()
+                        page.wait_for_timeout(1500)
+                        logger.log(f"Opening Following menu for {target_type} to check Favorites: {target_url}")
             else:
                 follow_btn.click()
                 page.wait_for_timeout(1500)
@@ -162,30 +179,112 @@ def execute_auto_follow(page, target_url: str, target_type: str = "USER", set_fa
             
             if set_favorites:
                 fav_selectors = [
-                    "div[role='menuitem']:has-text('Favorites')",
-                    "div[role='menuitem']:has-text('ការចូលចិត្ត')",
-                    "div[role='checkbox']:has-text('Favorites')",
+                    # Dialog Specific Selectors (Modal dialog shown in Facebook)
                     "div[role='dialog'] span:has-text('Favorites')",
-                    "div[role='dialog'] span:has-text('ការចូលចិត្ត')",
+                    "div[role='dialog'] span:has-text('Favourites')",
+                    "div[role='dialog'] span:has-text('សំណព្វ')",
+                    "div[role='dialog'] div[role='radio']:has-text('Favorites')",
+                    "div[role='dialog'] div[role='radio']:has-text('Favourites')",
+                    "div[role='dialog'] div[role='radio']:has-text('សំណព្វ')",
+                    "div[role='dialog'] label:has-text('Favorites')",
+                    "div[role='dialog'] label:has-text('Favourites')",
+                    "div[role='dialog'] label:has-text('សំណព្វ')",
+                    "div[role='dialog'] div:has-text('Favorites')",
+                    "div[role='dialog'] div:has-text('Favourites')",
+                    "div[role='dialog'] div:has-text('សំណព្វ')",
+                    # Menuitem / Dropdown Selectors
+                    "div[role='menuitem']:has-text('Favorites')",
+                    "div[role='menuitem']:has-text('Favourites')",
+                    "div[role='menuitem']:has-text('សំណព្វ')",
+                    "div[role='checkbox']:has-text('Favorites')",
+                    "div[role='checkbox']:has-text('Favourites')",
+                    "div[role='checkbox']:has-text('សំណព្វ')",
+                    "div[role='radio']:has-text('Favorites')",
+                    "div[role='radio']:has-text('Favourites')",
+                    "div[role='radio']:has-text('សំណព្វ')",
+                    "div[aria-label='Favorites']",
+                    "div[aria-label='Favourites']",
+                    "div[aria-label='សំណព្វ']",
                     "span:has-text('Favorites')",
-                    "span:has-text('ការចូលចិត្ត')",
-                    "div:has-text('Favorites')"
+                    "span:has-text('Favourites')",
+                    "span:has-text('សំណព្វ')"
                 ]
                 
                 fav_opt = None
-                for f_sel in fav_selectors:
-                    fav_opt = page.query_selector(f_sel)
+                # Smart polling loop to wait up to 5 seconds for Facebook menu to render
+                for attempt in range(2):
+                    start_time = time.time()
+                    while time.time() - start_time < 3.0:
+                        for f_sel in fav_selectors:
+                            try:
+                                elem = page.query_selector(f_sel)
+                                if elem and elem.is_visible():
+                                    fav_opt = elem
+                                    break
+                            except Exception:
+                                pass
+                        if fav_opt:
+                            break
+                        page.wait_for_timeout(400)
+                    
                     if fav_opt:
                         break
+                    
+                    # If menu failed to open on first attempt, re-click Following button once
+                    if attempt == 0 and follow_btn:
+                        try:
+                            logger.log(f"Retrying Following menu click for {target_type}...")
+                            follow_btn.click()
+                            page.wait_for_timeout(1000)
+                        except Exception:
+                            pass
                         
                 if fav_opt:
                     logger.log("Follow / Favorites option detected. Selecting Favorites...")
-                    fav_opt.click()
+                    try:
+                        fav_opt.click()
+                    except Exception:
+                        page.evaluate("(el) => el.click()", fav_opt)
                     page.wait_for_timeout(1000)
                     
-                    update_btn = page.query_selector("div[role='button']:has-text('Update'), div[role='button']:has-text('ធ្វើបច្ចុប្បន្នភាព'), div[role='button']:has-text('រក្សាទុក')")
+                    # Scroll dialog down to ensure Update button is visible
+                    try:
+                        dialog = page.query_selector("div[role='dialog']")
+                        if dialog:
+                            page.evaluate("(d) => d.scrollTop = d.scrollHeight", dialog)
+                            page.wait_for_timeout(500)
+                    except Exception:
+                        pass
+                    
+                    update_btn = None
+                    update_selectors = [
+                        "div[role='dialog'] div[role='button']:has-text('Update')",
+                        "div[role='dialog'] div[role='button']:has-text('Done')",
+                        "div[role='dialog'] div[role='button']:has-text('Save')",
+                        "div[role='dialog'] div[role='button']:has-text('ធ្វើបច្ចុប្បន្នភាព')",
+                        "div[role='dialog'] div[role='button']:has-text('រក្សាទុក')",
+                        "div[role='dialog'] div[role='button']:has-text('រួចរាល់')",
+                        "div[role='button']:has-text('Update')",
+                        "div[role='button']:has-text('Done')",
+                        "div[role='button']:has-text('Save')",
+                        "div[role='button']:has-text('ធ្វើបច្ចុប្បន្នភាព')",
+                        "div[role='button']:has-text('រក្សាទុក')",
+                        "div[role='button']:has-text('រួចរាល់')"
+                    ]
+                    for u_sel in update_selectors:
+                        try:
+                            u_elem = page.query_selector(u_sel)
+                            if u_elem and u_elem.is_visible():
+                                update_btn = u_elem
+                                break
+                        except Exception:
+                            pass
+                            
                     if update_btn:
-                        update_btn.click()
+                        try:
+                            update_btn.click()
+                        except Exception:
+                            page.evaluate("(el) => el.click()", update_btn)
                         page.wait_for_timeout(1000)
                         logger.log(f"Successfully updated Page Follow settings to Favorites on: {target_url}")
                     else:

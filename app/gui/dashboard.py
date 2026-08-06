@@ -229,7 +229,7 @@ class DashboardApp(ctk.CTk):
         self.watch_time_entry.bind("<KeyRelease>", lambda event: self.save_current_automation_state())
         
         # Row 2 Options: Window Layout & Device Emulation Toggles
-        self.tile_on_launch_var = ctk.StringVar(value="off")
+        self.tile_on_launch_var = ctk.StringVar(value="on")
         tile_cb = ctk.CTkCheckBox(
             opts_card, text="Tile Windows", font=FONT_TEXT_BOLD, text_color=COLOR_TEXT_MAIN,
             variable=self.tile_on_launch_var, onvalue="on", offvalue="off"

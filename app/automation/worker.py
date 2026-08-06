@@ -36,12 +36,22 @@ class LaunchWorker(threading.Thread):
         
         # Grid layout calculation:
         if self.small_window:
-            # For small window mode, fix window size to portrait style (e.g. 390x820)
-            win_w = 390
-            win_h = min(820, self.screen_h - 80)
-            # Calculate how many small windows fit side-by-side
-            cols = max(1, self.screen_w // win_w)
-            rows = max(1, (self.screen_h - 80) // win_h)
+            # For small window mode: adjust window width based on count so all fit within screen_w without cut off
+            if count <= 10:
+                cols = count
+                rows = 1
+                win_w = max(350, self.screen_w // count) if count > 0 else 390
+                win_h = min(820, self.screen_h - 80)
+                if count <= 1:
+                    step_x = 0
+                else:
+                    step_x = (self.screen_w - win_w) // (count - 1)
+            else:
+                win_w = 390
+                win_h = min(820, self.screen_h - 80)
+                cols = max(1, self.screen_w // win_w)
+                rows = (count + cols - 1) // cols
+                step_x = win_w
         else:
             # Determine number of columns and rows based on browser count for desktop grid
             cols = 2
@@ -57,6 +67,7 @@ class LaunchWorker(threading.Thread):
             # Individual window size (subtracting taskbar/margins)
             win_w = self.screen_w // cols
             win_h = (self.screen_h - 60) // rows  # 60px padding for taskbar/titlebars
+            step_x = win_w
         
         for index, profile in enumerate(self.selected_profiles):
             profile_id = profile["id"]
@@ -71,10 +82,14 @@ class LaunchWorker(threading.Thread):
             # Apply grid positioning if tile layout is checked
             win_x, win_y = None, None
             if self.tile:
-                r = index // cols
-                c = index % cols
-                win_x = c * win_w
-                win_y = r * win_h
+                if self.small_window and count <= 10:
+                    win_x = index * step_x
+                    win_y = 0
+                else:
+                    r = index // cols
+                    c = index % cols
+                    win_x = c * win_w
+                    win_y = r * win_h
                 logger.log(f"[{profile_name}] Arranging position at Grid: ({win_x}, {win_y}) with Size: {win_w}x{win_h}")
 
             if index > 0 and self.delay_sec > 0:
