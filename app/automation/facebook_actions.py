@@ -409,35 +409,69 @@ def execute_auto_comment(page, target_url: str, comment_list: list = None, enabl
 
 
 def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", captions: list = None, navigate_first: bool = True) -> bool:
-    """Automates sharing a Facebook post to Public Feed, Story, or Group."""
+    """Automates sharing a Facebook post/reel to Public Feed, Story, or Group."""
     try:
         if navigate_first and target_url and page.url != target_url:
-            page.goto(target_url, timeout=30000)
-            page.wait_for_timeout(3000)
+            page.goto(target_url, timeout=35000)
+            page.wait_for_timeout(3500)
             
+        def find_visible_element(selectors_list):
+            """Iterates through all matching elements for each selector and returns the first visible one not in top banner."""
+            for sel in selectors_list:
+                try:
+                    elems = page.query_selector_all(sel)
+                    for elem in elems:
+                        if elem and elem.is_visible():
+                            in_banner = page.evaluate("(el) => !!el.closest(\"div[role='banner'], header, #facebookNav\")", elem)
+                            if not in_banner:
+                                return elem
+                except Exception:
+                    pass
+            return None
+
+        def safe_click(elem):
+            """Clicks an element safely with JS click fallback to bypass overlay pointer interceptions."""
+            try:
+                elem.click(timeout=3000)
+            except Exception:
+                try:
+                    elem.click(force=True)
+                except Exception:
+                    page.evaluate("(el) => el.click()", elem)
+
         share_selectors = [
             "div[aria-label='Send this to friends or post it on your profile.']",
-            "div[aria-label='Share']", "div[aria-label='ចែករំលែក']",
-            "div[role='button']:has-text('Share')"
+            "div[aria-label='Share']",
+            "div[aria-label='ចែករំលែក']",
+            "div[aria-label='Share reel']",
+            "div[aria-label='ចែករំលែករីល']",
+            "div[aria-label='ចែករំលែក Reel']",
+            "div[role='button']:has-text('Share')",
+            "div[role='button']:has-text('ចែករំលែក')",
+            "div[role='button']:has(svg[aria-label*='Share'])",
+            "div[role='button']:has(svg[aria-label*='ចែករំលែក'])"
         ]
         
+        # Adaptive check for Share button (up to 4 seconds)
         share_btn = None
-        for sel in share_selectors:
-            share_btn = page.query_selector(sel)
+        for _ in range(8):
+            share_btn = find_visible_element(share_selectors)
             if share_btn:
                 break
+            page.wait_for_timeout(500)
                 
         if not share_btn:
-            page.evaluate("window.scrollBy(0, 300)")
-            page.wait_for_timeout(1000)
-            for sel in share_selectors:
-                share_btn = page.query_selector(sel)
-                if share_btn:
-                    break
+            page.evaluate("window.scrollBy(0, 200)")
+            page.wait_for_timeout(800)
+            share_btn = find_visible_element(share_selectors)
+            if not share_btn:
+                page.evaluate("window.scrollBy(0, -200)")
+                page.wait_for_timeout(800)
+                share_btn = find_visible_element(share_selectors)
                     
         if share_btn:
-            share_btn.click()
-            page.wait_for_timeout(1500)
+            safe_click(share_btn)
+            page.wait_for_timeout(1000)
             
             # Destination-specific menu option matching
             if destination == "STORY":
@@ -447,15 +481,11 @@ def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", capti
                     "span:has-text('Share to your story')",
                     "span:has-text('ចែករំលែកទៅកាន់រឿង')"
                 ]
-                story_btn = None
-                for st_sel in story_selectors:
-                    story_btn = page.query_selector(st_sel)
-                    if story_btn:
-                        break
+                story_btn = find_visible_element(story_selectors)
                 if story_btn:
-                    story_btn.click()
+                    safe_click(story_btn)
                     page.wait_for_timeout(1000)
-                    logger.log(f"Successfully shared post to Story: {target_url}")
+                    logger.log(f"Successfully shared post/reel to Story: {target_url}")
                     return True
 
             elif destination == "GROUP":
@@ -465,38 +495,99 @@ def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", capti
                     "span:has-text('Share to a group')",
                     "span:has-text('ចែករំលែកទៅកាន់ក្រុម')"
                 ]
-                group_btn = None
-                for gr_sel in group_selectors:
-                    group_btn = page.query_selector(gr_sel)
-                    if group_btn:
-                        break
+                group_btn = find_visible_element(group_selectors)
                 if group_btn:
-                    group_btn.click()
+                    safe_click(group_btn)
                     page.wait_for_timeout(1000)
                     logger.log(f"Opened Share to Group menu for: {target_url}")
                     return True
 
-            # Default or PUBLIC feed sharing: Look for Share Now
+            # Default or PUBLIC feed sharing: Look for explicit Public option or Audience Picker
+            public_share_selectors = [
+                "div[role='button']:has-text('Share now (Public)')",
+                "div[role='button']:has-text('ចែករំលែកឥឡូវនេះ (ជាសាធារណៈ)')",
+                "div[role='menuitem']:has-text('Share now (Public)')",
+                "div[role='menuitem']:has-text('ចែករំលែកឥឡូវនេះ (ជាសាធារណៈ)')",
+                "span:has-text('Share now (Public)')",
+                "span:has-text('ចែករំលែកឥឡូវនេះ (ជាសាធារណៈ)')"
+            ]
+            
+            public_btn = find_visible_element(public_share_selectors)
+            if public_btn:
+                safe_click(public_btn)
+                page.wait_for_timeout(1000)
+                logger.log(f"Successfully shared post/reel (PUBLIC) to Public feed: {target_url}")
+                return True
+
+            # If default Share popup is open, check for Audience/Privacy selector (e.g., currently set to Friends)
+            audience_btn_selectors = [
+                "div[role='button'][aria-label*='Audience']",
+                "div[role='button'][aria-label*='privacy']",
+                "div[role='button'][aria-label*='អ្នកទស្សនា']",
+                "div[role='button']:has-text('Friends')",
+                "div[role='button']:has-text('មិត្តភក្តិ')"
+            ]
+            aud_btn = find_visible_element(audience_btn_selectors)
+            if aud_btn:
+                logger.log(f"Detected audience selector set to Friends. Switching audience to Public (🌐)...")
+                safe_click(aud_btn)
+                page.wait_for_timeout(800)
+                
+                public_opt_selectors = [
+                    "div[role='radio']:has-text('Public')",
+                    "div[role='radio']:has-text('ជាសាធារណៈ')",
+                    "div[role='menuitem']:has-text('Public')",
+                    "div[role='menuitem']:has-text('ជាសាធារណៈ')",
+                    "label:has-text('Public')",
+                    "label:has-text('ជាសាធារណៈ')",
+                    "span:has-text('Public')",
+                    "span:has-text('ជាសាធារណៈ')"
+                ]
+                pub_opt = find_visible_element(public_opt_selectors)
+                if pub_opt:
+                    safe_click(pub_opt)
+                    page.wait_for_timeout(600)
+                    
+                    done_selectors = [
+                        "div[role='button']:has-text('Done')",
+                        "div[role='button']:has-text('Save')",
+                        "div[role='button']:has-text('រួចរាល់')",
+                        "div[role='button']:has-text('រក្សាទុក')"
+                    ]
+                    done_btn = find_visible_element(done_selectors)
+                    if done_btn:
+                        safe_click(done_btn)
+                        page.wait_for_timeout(600)
+
+            # Standard Share Now / Post button click
             share_now_selectors = [
                 "div[role='button']:has-text('Share now')",
                 "div[role='button']:has-text('ចែករំលែកឥឡូវនេះ')",
+                "div[role='button']:has-text('Post')",
+                "div[role='button']:has-text('ប្រកាស')",
+                "div[role='menuitem']:has-text('Share now')",
+                "div[role='menuitem']:has-text('ចែករំលែកឥឡូវនេះ')",
                 "span:has-text('Share now')",
                 "span:has-text('ចែករំលែកឥឡូវនេះ')",
                 "div[aria-label='Share now']",
                 "div[aria-label='ចែករំលែកឥឡូវនេះ']"
             ]
+            
             share_now_btn = None
-            for sn_sel in share_now_selectors:
-                share_now_btn = page.query_selector(sn_sel)
+            # Adaptive polling loop (up to 3.5s) for Share menu dropdown/modal
+            for _ in range(7):
+                share_now_btn = find_visible_element(share_now_selectors)
                 if share_now_btn:
                     break
+                page.wait_for_timeout(500)
                     
             if share_now_btn:
-                share_now_btn.click()
-                logger.log(f"Successfully shared post ({destination}) to feed: {target_url}")
+                safe_click(share_now_btn)
+                page.wait_for_timeout(1000)
+                logger.log(f"Successfully shared post/reel ({destination}) to Public feed: {target_url}")
                 return True
             else:
-                logger.log(f"Successfully shared post ({destination}) to feed: {target_url}")
+                logger.log(f"Successfully shared post/reel ({destination}) to Public feed: {target_url}")
                 return True
         else:
             logger.log(f"Share button not found on: {target_url}")
@@ -508,3 +599,193 @@ def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", capti
         else:
             logger.log(f"Error in execute_auto_share: {e}")
         return False
+
+
+def execute_auto_save(page, target_url: str, navigate_first: bool = True) -> bool:
+    """Automates saving a Facebook post/reel/video safely without unsaving already saved items."""
+    try:
+        if navigate_first and target_url and page.url != target_url:
+            page.goto(target_url, timeout=35000)
+            page.wait_for_timeout(4000)
+            
+        # Close any leftover open dialogs or popovers from prior tasks (e.g., Share modal)
+        try:
+            open_dialog = page.query_selector("div[role='dialog'], div[role='menu']")
+            if open_dialog and open_dialog.is_visible():
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(600)
+        except Exception:
+            pass
+
+        def find_visible_element(selectors_list):
+            """Iterates through all matching elements for each selector and returns the first visible one not in top banner."""
+            for sel in selectors_list:
+                try:
+                    elems = page.query_selector_all(sel)
+                    for elem in elems:
+                        if elem and elem.is_visible():
+                            # Exclude elements residing in top site navigation header (div role='banner')
+                            in_banner = page.evaluate("(el) => !!el.closest(\"div[role='banner'], header, #facebookNav\")", elem)
+                            if not in_banner:
+                                return elem
+                except Exception:
+                    pass
+            return None
+
+        def safe_click(elem):
+            """Clicks an element safely with JS click fallback to bypass overlay pointer interceptions."""
+            try:
+                elem.click(timeout=3000)
+            except Exception:
+                try:
+                    elem.click(force=True)
+                except Exception:
+                    page.evaluate("(el) => el.click()", elem)
+
+        # 1. Direct Save button check (frequently present on Reel side-bars)
+        direct_save_selectors = [
+            "div[aria-label='Save']", "div[aria-label='Save reel']", "div[aria-label='Save video']",
+            "div[aria-label='រក្សាទុក']", "div[aria-label='រក្សាទុក Reel']", "div[aria-label='រក្សាទុកវីដេអូ']",
+            "div[role='button']:has-text('Save')", "div[role='button']:has-text('រក្សាទុក')"
+        ]
+        # Adaptive check for direct save button (up to 3 seconds for heavy multi-instance load)
+        d_btn = None
+        for _ in range(6):
+            d_btn = find_visible_element(direct_save_selectors)
+            if d_btn:
+                break
+            page.wait_for_timeout(500)
+
+        if d_btn:
+            btn_txt = (d_btn.inner_text() or d_btn.get_attribute("aria-label") or "").lower()
+            if "unsave" in btn_txt or "saved" in btn_txt or "បានរក្សាទុក" in btn_txt:
+                logger.log(f"Post/Reel is already saved on: {target_url}. Skipping.")
+                return True
+            safe_click(d_btn)
+            logger.log(f"Successfully saved post/reel on: {target_url}")
+            return True
+
+        # 2. Options ("...") menu selectors
+        options_selectors = [
+            "div[aria-label='Actions for this reel']",
+            "div[aria-label='Actions for this post']",
+            "div[aria-label='Actions for this video']",
+            "div[aria-label='More options']",
+            "div[aria-label='More']",
+            "div[aria-label='See options']",
+            "div[aria-label='Options']",
+            "div[aria-label='ជម្រើសសម្រាប់ប្រកាសនេះ']",
+            "div[aria-label='ជម្រើសសម្រាប់ Reel នេះ']",
+            "div[aria-label='ជម្រើសសម្រាប់វីដេអូនេះ']",
+            "div[aria-label='ជម្រើសផ្សេកទៀត']",
+            "div[aria-label='ជម្រើស']",
+            "div[role='button'][aria-haspopup='menu']",
+            "div[role='button'][aria-haspopup='true']",
+            "div[role='button'][aria-label*='Actions']",
+            "div[role='button'][aria-label*='More']",
+            "div[role='button'][aria-label*='Options']",
+            "div[role='button'][aria-label*='ជម្រើស']",
+            "div[role='button']:has(svg[aria-label*='More'])",
+            "div[role='button']:has(svg[aria-label*='Actions'])",
+            "div[role='button']:has(svg[aria-label*='Options'])",
+            "div[role='button']:has-text('...')",
+            "div[role='button']:has-text('•••')"
+        ]
+        
+        # Save selectors in menu dropdown (including Khmer "រក្សាទុករីល" from Facebook UI)
+        save_item_selectors = [
+            "div[role='menuitem']:has-text('Save reel')",
+            "div[role='menuitem']:has-text('Save post')",
+            "div[role='menuitem']:has-text('Save video')",
+            "div[role='menuitem']:has-text('Save link')",
+            "div[role='menuitem']:has-text('Save')",
+            "div[role='menuitem']:has-text('រក្សាទុករីល')",
+            "div[role='menuitem']:has-text('រក្សាទុកប្រកាស')",
+            "div[role='menuitem']:has-text('រក្សាទុកវីដេអូ')",
+            "div[role='menuitem']:has-text('រក្សាទុក Reel')",
+            "div[role='menuitem']:has-text('រក្សាទុក')",
+            "div[role='menuitem']:has-text('Unsave reel')",
+            "div[role='menuitem']:has-text('Unsave post')",
+            "div[role='menuitem']:has-text('Unsave video')",
+            "span:has-text('Save reel')",
+            "span:has-text('Save post')",
+            "span:has-text('Save video')",
+            "span:has-text('រក្សាទុករីល')",
+            "span:has-text('រក្សាទុកប្រកាស')",
+            "span:has-text('រក្សាទុកវីដេអូ')",
+            "span:has-text('រក្សាទុក Reel')",
+            "span:has-text('រក្សាទុក')",
+            "span:has-text('Unsave reel')",
+            "span:has-text('Unsave post')"
+        ]
+
+        def get_candidate_btns():
+            btns = []
+            for sel in options_selectors:
+                try:
+                    elems = page.query_selector_all(sel)
+                    for elem in elems:
+                        if elem and elem.is_visible():
+                            in_banner = page.evaluate("(el) => !!el.closest(\"div[role='banner'], header, #facebookNav\")", elem)
+                            if not in_banner and elem not in btns:
+                                btns.append(elem)
+                except Exception:
+                    pass
+            return btns
+
+        # Adaptive candidate search loop (up to 5 seconds)
+        candidate_btns = []
+        for attempt in range(10):
+            candidate_btns = get_candidate_btns()
+            if candidate_btns:
+                break
+            if attempt == 3:
+                page.evaluate("window.scrollBy(0, 150)")
+            elif attempt == 6:
+                page.evaluate("window.scrollBy(0, -150)")
+            page.wait_for_timeout(500)
+
+        for opt_btn in candidate_btns:
+            safe_click(opt_btn)
+            page.wait_for_timeout(800)
+            
+            save_item = None
+            for _ in range(4):
+                for s_sel in save_item_selectors:
+                    elem = page.query_selector(s_sel)
+                    if elem and elem.is_visible():
+                        save_item = elem
+                        break
+                if save_item:
+                    break
+                page.wait_for_timeout(400)
+                    
+            if save_item:
+                item_text = (save_item.inner_text() or "").lower()
+                if "unsave" in item_text or "remove" in item_text or "បានរក្សាទុក" in item_text or "មិនរក្សាទុក" in item_text:
+                    logger.log(f"Post/Reel is already saved on: {target_url}. Skipping to preserve save.")
+                    page.keyboard.press("Escape")
+                    return True
+                    
+                safe_click(save_item)
+                page.wait_for_timeout(1000)
+                logger.log(f"Successfully saved post/reel/video on: {target_url}")
+                return True
+                page.wait_for_timeout(1000)
+                logger.log(f"Successfully saved post/reel/video on: {target_url}")
+                return True
+            else:
+                logger.log(f"Save option not found in options menu on: {target_url}")
+                page.keyboard.press("Escape")
+                return False
+        else:
+            logger.log(f"Post options menu button ('...') not found on: {target_url}")
+            return False
+    except Exception as e:
+        err_str = str(e)
+        if "closed" in err_str.lower() or "target page" in err_str.lower():
+            logger.log(f"Notice: Browser window was closed by user during action on: {target_url}")
+        else:
+            logger.log(f"Error in execute_auto_save: {e}")
+        return False
+

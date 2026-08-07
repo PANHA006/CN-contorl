@@ -172,7 +172,7 @@ class AutomationTaskWorker(threading.Thread):
 
     def run(self):
         from app.automation.facebook_actions import (
-            execute_auto_like, execute_auto_follow, execute_auto_comment, execute_auto_share
+            execute_auto_like, execute_auto_follow, execute_auto_comment, execute_auto_share, execute_auto_save
         )
         import random
         
@@ -220,8 +220,8 @@ class AutomationTaskWorker(threading.Thread):
                             except Exception as e:
                                 logger.log(f"[{i.profile_name}] Navigation error: {e}")
                                 
-                        # Watch Video Time Delay before actions (only run if LIKE, COMMENT, or SHARE post tasks are enabled)
-                        is_post_action = any(t in self.tasks_list for t in ["LIKE", "COMMENT", "SHARE"])
+                        # Watch Video Time Delay before actions (only run if LIKE, COMMENT, SHARE, or SAVE post tasks are enabled)
+                        is_post_action = any(t in self.tasks_list for t in ["LIKE", "COMMENT", "SHARE", "SAVE"])
                         raw_watch = float(self.options.get("watch_time", 0))
                         watch_time = raw_watch if is_post_action else 0.0
 
@@ -276,6 +276,10 @@ class AutomationTaskWorker(threading.Thread):
                                 target_type = self.options.get("target_type", "USER")
                                 set_favorites = self.options.get("set_favorites", True)
                                 execute_auto_follow(page, self.target_url, target_type=target_type, set_favorites=set_favorites, navigate_first=False)
+                                time.sleep(random.uniform(1.0, 2.5))
+                                
+                            elif task == "SAVE":
+                                execute_auto_save(page, self.target_url, navigate_first=False)
                                 time.sleep(random.uniform(1.0, 2.5))
                     except Exception as ex:
                         logger.log(f"[{i.profile_name}] Error during action execution: {ex}")

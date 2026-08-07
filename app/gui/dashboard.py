@@ -329,15 +329,16 @@ class DashboardApp(ctk.CTk):
         self.target_url_entry.grid(row=2, column=0, padx=15, pady=(0, 6), sticky="ew")
         self.target_url_entry.bind("<KeyRelease>", lambda event: self.save_current_automation_state())
         
-        # Checkboxes Bar (Auto Follow, Auto Like, Auto Comment, Auto Share)
+        # Checkboxes Bar (Auto Follow, Auto Like, Auto Comment, Auto Share, Auto Save)
         cb_bar = ctk.CTkFrame(controls_card, fg_color=COLOR_CARD_BG, corner_radius=8)
         cb_bar.grid(row=3, column=0, padx=15, pady=4, sticky="ew")
-        cb_bar.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        cb_bar.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
         
         self.chk_follow_var = ctk.StringVar(value="off")
         self.chk_like_var = ctk.StringVar(value="off")
         self.chk_comment_var = ctk.StringVar(value="off")
         self.chk_share_var = ctk.StringVar(value="off")
+        self.chk_save_var = ctk.StringVar(value="off")
         
         chk_follow = ctk.CTkCheckBox(
             cb_bar, text="Auto Follow", font=FONT_TEXT_BOLD, text_color=COLOR_TEXT_MAIN,
@@ -366,6 +367,13 @@ class DashboardApp(ctk.CTk):
             command=self.on_combination_checkbox_toggled
         )
         chk_share.grid(row=0, column=3, padx=8, pady=8)
+
+        chk_save = ctk.CTkCheckBox(
+            cb_bar, text="Auto Save", font=FONT_TEXT_BOLD, text_color=COLOR_TEXT_MAIN,
+            variable=self.chk_save_var, onvalue="on", offvalue="off",
+            command=self.on_combination_checkbox_toggled
+        )
+        chk_save.grid(row=0, column=4, padx=8, pady=8)
         
         # Details Container Frame for dynamic sub-options
         self.details_container = ctk.CTkFrame(controls_card, fg_color="transparent")
@@ -574,16 +582,17 @@ class DashboardApp(ctk.CTk):
     # --- CHECKBOX TOGGLE LOGIC ---
     
     def on_follow_checkbox_toggled(self):
-        """If Auto Follow is checked, automatically uncheck Like, Comment, Share."""
+        """If Auto Follow is checked, automatically uncheck Like, Comment, Share, Save."""
         if self.chk_follow_var.get() == "on":
             self.chk_like_var.set("off")
             self.chk_comment_var.set("off")
             self.chk_share_var.set("off")
+            self.chk_save_var.set("off")
         self.update_automation_detail_frames()
 
     def on_combination_checkbox_toggled(self):
-        """If Like, Comment, or Share is checked, automatically uncheck Auto Follow."""
-        if any([self.chk_like_var.get() == "on", self.chk_comment_var.get() == "on", self.chk_share_var.get() == "on"]):
+        """If Like, Comment, Share, or Save is checked, automatically uncheck Auto Follow."""
+        if any([self.chk_like_var.get() == "on", self.chk_comment_var.get() == "on", self.chk_share_var.get() == "on", self.chk_save_var.get() == "on"]):
             self.chk_follow_var.set("off")
         self.update_automation_detail_frames()
 
@@ -1007,9 +1016,11 @@ class DashboardApp(ctk.CTk):
             tasks_list.append("COMMENT")
         if self.chk_share_var.get() == "on":
             tasks_list.append("SHARE")
+        if self.chk_save_var.get() == "on":
+            tasks_list.append("SAVE")
             
         if not tasks_list:
-            logger.log("Warning: Please check at least one automation action (Follow, Like, Comment, or Share).")
+            logger.log("Warning: Please check at least one automation action (Follow, Like, Comment, Share, or Save).")
             return
             
         delay = self.get_delay_seconds()
