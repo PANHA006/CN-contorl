@@ -524,8 +524,10 @@ def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", capti
                 "div[role='button'][aria-label*='Audience']",
                 "div[role='button'][aria-label*='privacy']",
                 "div[role='button'][aria-label*='អ្នកទស្សនា']",
+                "div[role='button'][aria-label*='ទស្សនិកជន']",
                 "div[role='button']:has-text('Friends')",
-                "div[role='button']:has-text('មិត្តភក្តិ')"
+                "div[role='button']:has-text('មិត្តភក្តិ')",
+                "div[role='button']:has-text('ទស្សនិកជន')"
             ]
             aud_btn = find_visible_element(audience_btn_selectors)
             if aud_btn:
@@ -535,12 +537,17 @@ def execute_auto_share(page, target_url: str, destination: str = "PUBLIC", capti
                 
                 public_opt_selectors = [
                     "div[role='radio']:has-text('Public')",
+                    "div[role='radio']:has-text('សាធារណៈ')",
                     "div[role='radio']:has-text('ជាសាធារណៈ')",
+                    "div[role='radio']:has-text('គ្រប់គ្នានៅក្នុង')",
                     "div[role='menuitem']:has-text('Public')",
+                    "div[role='menuitem']:has-text('សាធារណៈ')",
                     "div[role='menuitem']:has-text('ជាសាធារណៈ')",
                     "label:has-text('Public')",
+                    "label:has-text('សាធារណៈ')",
                     "label:has-text('ជាសាធារណៈ')",
                     "span:has-text('Public')",
+                    "span:has-text('សាធារណៈ')",
                     "span:has-text('ជាសាធារណៈ')"
                 ]
                 pub_opt = find_visible_element(public_opt_selectors)
